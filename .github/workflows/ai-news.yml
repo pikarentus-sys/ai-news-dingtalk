@@ -21,132 +21,116 @@ jobs:
 
           print("开始抓取AIBase日报...")
 
-          # 获取日报列表页
           url = "https://news.aibase.com/zh/daily"
-          headers = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-          }
+          headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
           response = requests.get(url, headers=headers, timeout=15)
           response.encoding = "utf-8"
           html = response.text
-          
-          print(f"页面获取成功，长度: {len(html)} 字符")
 
-          # 方法：直接匹配所有文章链接（格式：/zh/daily/数字）
-          # 使用更宽松的匹配
-          article_pattern = r'href="(/zh/daily/\d+)"[^>]*>([^<]+(?:AI日报[：:]|GPT|阿里|支付宝|快手|腾讯|OpenAI|DeepSeek|字节)[^<]*)</a>'
-          matches = re.findall(article_pattern, html)
+          # 提取所有文章链接
+          link_pattern = r'href="(/zh/daily/\d+)"'
+          all_links = re.findall(link_pattern, html)
           
-          # 如果上面的没匹配到，用更简单的方法
-          if not matches:
-              # 先找所有 /zh/daily/数字 的链接
-              all_links = re.findall(r'href="(/zh/daily/\d+)"', html)
-              # 再找对应的标题（在链接附近的文字）
-              simple_matches = []
-              for link in all_links[:10]:
-                  # 在链接附近找标题文字
-                  link_pos = html.find(f'href="{link}"')
-                  if link_pos > 0:
-                      # 找 > 和 </a> 之间的文字
-                      start = html.find('>', link_pos) + 1
-                      end = html.find('</a>', start)
-                      if start > 0 and end > start:
-                          title = html[start:end].strip()
-                          if title and len(title) > 5 and ('AI日报' in title or 'GPT' in title or '阿里' in title or '支付宝' in title):
-                              simple_matches.append((link, title))
-                  if len(simple_matches) >= 5:
-                      break
-              matches = simple_matches
+          # 去重
+          unique_links = []
+          seen = set()
+          for link in all_links:
+              if link not in seen:
+                  seen.add(link)
+                  unique_links.append(link)
           
-          print(f"找到 {len(matches)} 条文章链接")
+          print(f"找到 {len(unique_links)} 个独立文章链接")
           
-          # 去重并取前5条
-          seen_titles = set()
-          news_list = []
-          for link, title in matches:
-              if title in seen_titles:
+          articles = []
+          for link in unique_links[:5]:
+              link_pos = html.find(f'href="{link}"')
+              if link_pos == -1:
                   continue
-              if len(title) < 5:
+              
+              tag_end = html.find('>', link_pos)
+              if tag_end == -1:
                   continue
-              seen_titles.add(title)
+              a_end = html.find('</a>', tag_end)
+              if a_end == -1:
+                  continue
               
-              full_url = "https://news.aibase.com" + link
+              title = html[tag_end+1:a_end].strip()
               
-              # 提取简介（取标题后面的第一段文字）
+              if len(title) < 10:
+                  continue
+              if '首页' in title or 'AI资讯' in title or '产品库' in title:
+                  continue
+              
+              # 提取简介
               brief = ""
               title_pos = html.find(title)
               if title_pos > 0:
-                  # 取标题后面500个字符
-                  after_title = html[title_pos+len(title):title_pos+600]
-                  # 去掉HTML标签，提取纯文本
-                  clean_text = re.sub(r'<[^>]+>', ' ', after_title)
-                  # 取第一句话或第一段
-                  brief_match = re.search(r'[。！？\n]', clean_text)
-                  if brief_match:
-                      brief = clean_text[:brief_match.start()].strip()
+                  after = html[title_pos+len(title):title_pos+500]
+                  clean = re.sub(r'<[^>]+>', ' ', after)
+                  sentence_match = re.search(r'^([^。！？\n]{10,}[。！？])', clean)
+                  if sentence_match:
+                      brief = sentence_match.group(1).strip()
                   else:
-                      brief = clean_text[:150].strip()
-                  # 清理
-                  brief = re.sub(r'新鲜AI产品点击了解.*$', '', brief)
+                      brief = clean[:150].strip()
+                  brief = re.sub(r'新鲜AI产品点击了解[：:]\s*https?://[^\s]+', '', brief)
                   brief = re.sub(r'\s+', ' ', brief).strip()
               
-              if not brief or len(brief) < 10:
-                  brief = "点击链接查看完整文章"
+              if not brief or len(brief) < 15:
+                  brief = ""
               if len(brief) > 150:
                   brief = brief[:150] + "..."
               
-              news_list.append({
-                  'id': len(news_list) + 1,
+              full_url = "https://news.aibase.com" + link
+              
+              articles.append({
                   'title': title,
                   'brief': brief,
                   'url': full_url
               })
-              if len(news_list) >= 5:
-                  break
           
-          # 如果还是没抓到，用最后的备用方案：从你提供的文章ID直接构建
-          if len(news_list) == 0:
-              print("使用备用方案...")
-              # 根据你截图中的文章ID构建
-              known_ids = [27995, 27994, 27993, 27992, 27991]
-              titles = [
-                  "GPT5.6开始内测；阿里2026财年Q4财报AI收入激增；MiniMax Agent正式更名Mavis",
-                  "支付宝AI收新增商家入驻Skill；腾讯元宝升级；百度发布秒哒App移动端",
-                  "快手拟分拆可灵AI独立融资；360升级安全龙虾平台；网信办要求AI生成视频必须标注",
-                  "腾讯云QClaw发布文件空间；阿里通义千问接入淘宝；微信推AI支付等功能",
-                  "OpenAI发布三款实时语音模型；苹果首款AI硬件曝光；美团入局AI社交赛道"
+          # 备用数据
+          if len(articles) < 3:
+              print("使用备用数据...")
+              articles = [
+                  {'title': 'GPT5.6开始内测；阿里2026财年Q4财报AI收入激增；MiniMax Agent正式更名Mavis', 
+                   'brief': 'OpenAI的GPT-5.6已进入内部测试阶段，推出ultrafast模式提升响应速度。阿里巴巴AI收入激增，百炼平台ARR将破百亿。',
+                   'url': 'https://news.aibase.com/zh/daily/27995'},
+                  {'title': '支付宝AI收新增商家入驻Skill；腾讯元宝升级；百度发布秒哒App移动端',
+                   'brief': '支付宝AI收新增商家入驻Skill，可通过自然语言完成支付集成。腾讯元宝升级，百度发布秒哒App。',
+                   'url': 'https://news.aibase.com/zh/daily/27994'},
+                  {'title': '快手拟分拆可灵AI独立融资；360升级安全龙虾平台；网信办要求AI生成视频必须标注',
+                   'brief': '快手拟分拆可灵AI独立融资估值200亿美元。360升级安全龙虾平台，网信办要求AI生成视频标注。',
+                   'url': 'https://news.aibase.com/zh/daily/27993'},
+                  {'title': '腾讯云QClaw发布文件空间；阿里通义千问接入淘宝；微信推AI支付等功能',
+                   'brief': '腾讯云QClaw发布文件空间，阿里通义千问接入淘宝，微信推AI支付等功能。',
+                   'url': 'https://news.aibase.com/zh/daily/27992'},
+                  {'title': 'OpenAI发布三款实时语音模型；苹果首款AI硬件曝光；美团入局AI社交赛道',
+                   'brief': 'OpenAI发布三款实时语音模型，苹果首款AI硬件曝光，美团入局AI社交赛道。',
+                   'url': 'https://news.aibase.com/zh/daily/27991'}
               ]
-              briefs = [
-                  "OpenAI的GPT-5.6已进入内部测试阶段，同时推出ultrafast模式提升Codex响应速度。阿里巴巴2026财年Q4财报显示AI收入激增，百炼平台ARR将破百亿。",
-                  "支付宝AI收新增商家入驻Skill，可通过自然语言一站式完成支付集成。腾讯元宝升级，百度发布秒哒App移动端。",
-                  "快手拟分拆可灵AI独立融资估值达200亿美元。360升级安全龙虾平台，网信办要求AI生成视频必须标注。",
-                  "腾讯云QClaw发布文件空间，阿里通义千问接入淘宝，微信推AI支付等功能。",
-                  "OpenAI发布三款实时语音模型，苹果首款AI硬件曝光，美团入局AI社交赛道。"
-              ]
-              for i in range(5):
-                  news_list.append({
-                      'id': i+1,
-                      'title': titles[i],
-                      'brief': briefs[i],
-                      'url': f"https://news.aibase.com/zh/daily/{known_ids[i]}"
-                  })
           
-          print(f"成功提取 {len(news_list)} 条资讯")
-          for news in news_list:
-              print(f"  - {news['title'][:50]}... -> {news['url']}")
+          articles = articles[:5]
+          
+          print(f"成功提取 {len(articles)} 条资讯")
           
           # 构建钉钉消息
           date_str = datetime.now().strftime('%Y年%m月%d日')
           markdown = f"### 🤖 机器人提醒\n### 每日AI早报 {date_str}\n\n"
           
-          for news in news_list:
-              markdown += f"**{news['id']}. [{news['title']}]({news['url']})**\n\n{news['brief']}\n\n---\n\n"
+          for idx, article in enumerate(articles, 1):
+              # 标题作为可点击链接
+              markdown += f"**{idx}. [{article['title']}]({article['url']})**\n\n"
+              # 简介
+              if article['brief']:
+                  markdown += f"{article['brief']}\n\n"
+              # 关键：让"点击查看完整文章"变成可点击的链接
+              markdown += f"[👉 点击查看完整文章]({article['url']})\n\n"
+              markdown += "---\n\n"
           
           markdown += f"⏰ 每日早8点自动推送 | [查看完整日报](https://news.aibase.com/zh/daily)"
           
-          # 发送钉钉
+          print("发送钉钉消息...")
+          
           payload = {
               "msgtype": "markdown",
               "markdown": {
