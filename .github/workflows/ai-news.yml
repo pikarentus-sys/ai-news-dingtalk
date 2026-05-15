@@ -18,101 +18,70 @@ jobs:
           import re
           import json
           from datetime import datetime
+          import html as html_lib
 
+          # 获取页面
           url = "https://news.aibase.com/zh/daily"
           headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
           response = requests.get(url, headers=headers, timeout=15)
           response.encoding = "utf-8"
-          html = response.text
+          html_content = response.text
 
-          # 方法1：直接查找所有文章链接
-          # 匹配 /zh/daily/数字 这种格式的链接
-          article_links = re.findall(r'href="(/zh/daily/\d+)"', html)
-          article_titles = re.findall(r'<a[^>]*href="/zh/daily/\d+"[^>]*>([^<]+)</a>', html)
-          
+          # 提取所有文章链接和标题
+          # 匹配格式: <a href="/zh/daily/数字">标题</a>
+          pattern = r'<a href="(/zh/daily/\d+)"[^>]*>([^<]+)</a>'
+          matches = re.findall(pattern, html_content)
+
+          # 去重，保留顺序
+          seen = set()
+          unique_matches = []
+          for link, title in matches:
+              if title not in seen:
+                  seen.add(title)
+                  unique_matches.append((link, title))
+
+          # 取前5条
           news_list = []
-          seen_titles = set()
-          
-          for i in range(min(5, len(article_links))):
-              if i >= len(article_titles):
-                  break
-              
-              link = article_links[i]
-              title = article_titles[i].strip()
-              
-              # 去重
-              if title in seen_titles:
-                  continue
-              seen_titles.add(title)
-              
+          for idx, (link, title) in enumerate(unique_matches[:5], 1):
               full_url = "https://news.aibase.com" + link
               
-              # 提取简介：在标题附近找内容
+              # 提取该文章的简介
               brief = ""
-              # 在HTML中找到标题后面的段落
-              title_pos = html.find(title)
+              # 在HTML中找到标题附近的内容
+              title_pos = html_content.find(title)
               if title_pos > 0:
-                  # 取标题后面500个字符
-                  after_title = html[title_pos:title_pos+800]
-                  # 提取简介（去掉HTML标签）
-                  brief_match = re.search(r'</a>\s*<[^>]*>\s*([^<]+)</', after_title)
-                  if brief_match:
-                      brief = brief_match.group(1).strip()
-                  if not brief:
-                      # 备用：去掉标签后的纯文本
-                      text = re.sub(r'<[^>]+>', ' ', after_title[:500])
-                      brief = text[:200].strip()
+                  # 取标题后面600个字符
+                  snippet = html_content[title_pos:title_pos+600]
+                  # 找段落内容
+                  para_match = re.search(r'</a>\s*<[^>]*>\s*([^<]+(?:[\u4e00-\u9fa5]+[^<]*)?)', snippet)
+                  if para_match:
+                      brief = para_match.group(1).strip()
+                  # 清理多余字符
+                  brief = re.sub(r'新鲜AI产品点击了解.*$', '', brief)
+                  brief = re.sub(r'\s+', ' ', brief).strip()
               
-              if not brief:
+              if not brief or len(brief) < 10:
                   brief = "点击链接查看完整文章"
+              if len(brief) > 180:
+                  brief = brief[:180] + "..."
               
               news_list.append({
-                  'id': i+1,
+                  'id': idx,
                   'title': title,
-                  'brief': brief[:200],
+                  'brief': brief,
                   'url': full_url
               })
-          
-          # 如果上面的方法没抓到，用备用方法
-          if len(news_list) < 3:
-              news_list = []
-              # 备用：直接匹配 "AI日报：" 开头的段落
-              pattern = r'AI日报：([^<]+?)(?=AI日报：|欢迎来到|$)'
-              matches = re.findall(pattern, html, re.DOTALL)
-              
-              for idx, item in enumerate(matches[:5], 1):
-                  lines = [line.strip() for line in item.split('\n') if line.strip()]
-                  if not lines:
-                      continue
-                  title = lines[0]
-                  brief = ' '.join(lines[1:]) if len(lines) > 1 else ''
-                  brief = re.sub(r'新鲜AI产品点击了解：https?://[^\s]+', '', brief)
-                  brief = re.sub(r'\s+', ' ', brief).strip()
-                  if len(brief) > 200:
-                      brief = brief[:200] + '...'
-                  
-                  # 尝试从HTML中找对应的链接
-                  link_match = re.search(rf'<a[^>]*href="(/zh/daily/\d+)"[^>]*>{re.escape(title[:30])}', html)
-                  if link_match:
-                      detail_url = "https://news.aibase.com" + link_match.group(1)
-                  else:
-                      detail_url = "https://news.aibase.com/zh/daily"
-                  
-                  news_list.append({
-                      'id': idx,
-                      'title': title,
-                      'brief': brief,
-                      'url': detail_url
-                  })
-          
+
+          # 构建消息
           date_str = datetime.now().strftime('%Y年%m月%d日')
           markdown = f"### 🤖 机器人提醒\n### 每日AI早报 {date_str}\n\n"
-          
+
           for news in news_list:
               markdown += f"**{news['id']}. [{news['title']}]({news['url']})**\n\n{news['brief']}\n\n---\n\n"
-          
+
           markdown += f"⏰ 每日早8点自动推送 | [查看完整日报](https://news.aibase.com/zh/daily)"
-          
+
+          # 发送
           payload = {
               "msgtype": "markdown",
               "markdown": {
