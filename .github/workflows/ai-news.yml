@@ -1,0 +1,74 @@
+name: 每日AI资讯推送
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  send-news:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 获取并发送AI资讯
+        env:
+          WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK }}
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import requests
+          import re
+          import json
+          from datetime import datetime
+
+          url = "https://news.aibase.com/zh/daily"
+          headers = {"User-Agent": "Mozilla/5.0"}
+          response = requests.get(url, headers=headers, timeout=15)
+          response.encoding = "utf-8"
+          html = response.text
+
+          pattern = r'AI日报：([^<]+?)(?=AI日报：|欢迎来到|$)'
+          matches = re.findall(pattern, html, re.DOTALL)
+
+          news_list = []
+          for idx, item in enumerate(matches[:5], 1):
+              lines = [line.strip() for line in item.split('\n') if line.strip()]
+              if not lines:
+                  continue
+              title = lines[0]
+              brief = ' '.join(lines[1:]) if len(lines) > 1 else ''
+              brief = re.sub(r'新鲜AI产品点击了解：https?://[^\s]+', '', brief)
+              brief = re.sub(r'\s+', ' ', brief).strip()
+              if len(brief) > 200:
+                  brief = brief[:200] + '...'
+
+              link_match = re.search(rf'<a[^>]*href="([^"]*)"[^>]*>{re.escape(title)}</a>', html)
+              if link_match:
+                  detail_url = "https://news.aibase.com" + link_match.group(1)
+              else:
+                  detail_url = "https://news.aibase.com/zh/daily"
+
+              news_list.append({
+                  'id': idx,
+                  'title': title,
+                  'brief': brief,
+                  'url': detail_url
+              })
+
+          date_str = datetime.now().strftime('%Y年%m月%d日')
+          markdown = f"### 🤖 机器人提醒\n### 每日AI早报 {date_str}\n\n"
+
+          for news in news_list:
+              markdown += f"**{news['id']}. [{news['title']}]({news['url']})**\n\n{news['brief']}\n\n---\n\n"
+
+          markdown += f"⏰ 每日早8点自动推送 | [查看完整日报](https://news.aibase.com/zh/daily)"
+
+          payload = {
+              "msgtype": "markdown",
+              "markdown": {
+                  "title": "AI资讯速递",
+                  "text": markdown
+              }
+          }
+          webhook = "${{ secrets.DINGTALK_WEBHOOK }}"
+          result = requests.post(webhook, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+          print(f"发送结果: {result.json()}")
+          PYTHON_SCRIPT
